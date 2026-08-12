@@ -5,11 +5,14 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Extracts clean username from full links (e.g. 'https://www.instagram.com/nike/' -> 'nike')
+  // Smart URL Cleaner
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
-    str = str.split('?')[0].split('#')[0];
+    // Do NOT strip query params if it's a Facebook profile ID link
+    if (!str.includes('profile.php')) {
+      str = str.split('?')[0].split('#')[0];
+    }
     str = str.replace(/\/+$/, '');
     const parts = str.split('/');
     let last = parts[parts.length - 1];
@@ -44,10 +47,9 @@ module.exports = async (req, res) => {
       if (match && match[1]) count = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM (App-ID Header Query)
+    // 2. INSTAGRAM
     // ==========================================
     } else if (plat.includes('instagram')) {
-      // Query Instagram's native internal API using the official web App-ID
       try {
         const apiUrl = `https://i.instagram.com/api/v1/users/web_profile_info/?username=${cleanHandle}`;
         const apiRes = await fetch(apiUrl, {
@@ -65,7 +67,6 @@ module.exports = async (req, res) => {
         }
       } catch (e) {}
 
-      // Backup: OpenGraph metadata parser
       if (!count) {
         try {
           const res = await fetch(`https://www.instagram.com/${cleanHandle}/`, {
@@ -82,26 +83,44 @@ module.exports = async (req, res) => {
       }
 
     // ==========================================
-    // 3. FACEBOOK (Extracts ONLY clean numbers)
+    // 3. FACEBOOK (Handles both custom handles & profile.php?id= URLs)
     // ==========================================
     } else if (plat.includes('facebook')) {
-      let targetUrl = handle.startsWith('http') ? handle : `https://www.facebook.com/${cleanHandle}`;
-      targetUrl = targetUrl.split('?')[0];
+      let targetUrl = handle.trim();
+      
+      if (!targetUrl.startsWith('http')) {
+        targetUrl = `https://www.facebook.com/${cleanHandle}`;
+      }
+
+      // If not an ID link, safely strip tracking parameters
+      if (!targetUrl.includes('profile.php')) {
+        targetUrl = targetUrl.split('?')[0];
+      }
 
       const response = await fetch(targetUrl, {
         headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
       });
       const html = await response.text();
 
-      const match = html.match(/meta property="og:description" content="([^"]+)"/i) ||
-                    html.match(/meta name="description" content="([^"]+)"/i);
+      // Attempt A: OpenGraph Description Meta Tag
+      const metaMatch = html.match(/meta property="og:description" content="([^"]+)"/i) ||
+                        html.match(/meta name="description" content="([^"]+)"/i);
 
-      if (match && match[1]) {
-        const text = match[1];
-        // Extracts digits right before "likes", "followers", or "people follow this"
+      if (metaMatch && metaMatch[1]) {
+        const text = metaMatch[1];
         const numMatch = text.match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this)/i);
         if (numMatch && numMatch[1]) {
           count = numMatch[1];
+        }
+      }
+
+      // Attempt B: Internal Script Payload (Fallback if Meta Tag fails)
+      if (!count) {
+        const jsonMatch = html.match(/"follower_count":\s*(\d+)/) || 
+                          html.match(/"followers_count":\s*(\d+)/) ||
+                          html.match(/"subscriber_count":\s*(\d+)/);
+        if (jsonMatch && jsonMatch[1]) {
+          count = jsonMatch[1];
         }
       }
     }
