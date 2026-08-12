@@ -5,7 +5,7 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Extract clean username from URLs
+  // Extract clean username from URLs while preserving profile.php?id= links
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
@@ -46,7 +46,7 @@ module.exports = async (req, res) => {
       if (match && match[1]) count = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM (3-Tier Bypass Engine)
+    // 2. INSTAGRAM (Multi-tier bypass)
     // ==========================================
     } else if (plat.includes('instagram')) {
       
@@ -59,81 +59,100 @@ module.exports = async (req, res) => {
         return null;
       };
 
-      // Tier 1: Imginn Mirror
+      // Tier 1: Imginn
       try {
-        const res = await fetch(`https://imginn.com/${cleanHandle}/`, {
-          headers: { 'User-Agent': browserUA }
-        });
-        if (res.ok) {
-          const html = await res.text();
-          count = parseFollowers(html);
-        }
+        const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
+        if (res.ok) count = parseFollowers(await res.text());
       } catch (e) {}
 
-      // Tier 2: DuckDuckGo Search Indexing (if Imginn fails)
+      // Tier 2: DuckDuckGo Search Indexing
       if (!count) {
         try {
-          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Ainstagram.com%2F${cleanHandle}`;
-          const res = await fetch(ddgUrl, {
-            headers: { 'User-Agent': browserUA }
-          });
-          if (res.ok) {
-            const html = await res.text();
-            count = parseFollowers(html);
-          }
+          const res = await fetch(`https://html.duckduckgo.com/html/?q=site%3Ainstagram.com%2F${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
+          if (res.ok) count = parseFollowers(await res.text());
         } catch (e) {}
       }
 
-      // Tier 3: Picuki Mirror (if both fail)
+      // Tier 3: Picuki
       if (!count) {
         try {
-          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, {
-            headers: { 'User-Agent': browserUA }
-          });
-          if (res.ok) {
-            const html = await res.text();
-            count = parseFollowers(html);
-          }
+          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
+          if (res.ok) count = parseFollowers(await res.text());
         } catch (e) {}
       }
 
     // ==========================================
-    // 3. FACEBOOK
+    // 3. FACEBOOK (3-Tier Bypass Engine)
     // ==========================================
     } else if (plat.includes('facebook')) {
-      let targetUrl = handle.trim();
       
+      const parseFbFollowers = (htmlText) => {
+        if (!htmlText) return null;
+
+        // 1. Check meta tags for likes or followers
+        const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
+                          htmlText.match(/meta name="description" content="([^"]+)"/i);
+        if (metaMatch && metaMatch[1]) {
+          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this|people like this)/i);
+          if (numMatch && numMatch[1]) return numMatch[1];
+        }
+
+        // 2. Check JSON payload strings
+        const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
+                          htmlText.match(/"followers_count":\s*(\d+)/) ||
+                          htmlText.match(/"subscriber_count":\s*(\d+)/) ||
+                          htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/);
+        if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
+
+        // 3. General text match
+        const textMatch = htmlText.match(/([0-9.,KMBkmb]+)\s*(?:followers|people follow this)/i);
+        if (textMatch && textMatch[1]) return textMatch[1];
+
+        return null;
+      };
+
+      let targetUrl = handle.trim();
       if (!targetUrl.startsWith('http')) {
         targetUrl = `https://www.facebook.com/${cleanHandle}`;
       }
-
       if (!targetUrl.includes('profile.php')) {
         targetUrl = targetUrl.split('?')[0];
       }
 
-      const response = await fetch(targetUrl, {
-        headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
-      });
-      const html = await response.text();
-
-      const metaMatch = html.match(/meta property="og:description" content="([^"]+)"/i) ||
-                        html.match(/meta name="description" content="([^"]+)"/i);
-
-      if (metaMatch && metaMatch[1]) {
-        const text = metaMatch[1];
-        const numMatch = text.match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this)/i);
-        if (numMatch && numMatch[1]) {
-          count = numMatch[1];
+      // Tier 1: Desktop request with Bot User-Agent
+      try {
+        const response = await fetch(targetUrl, {
+          headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
+        });
+        if (response.ok) {
+          count = parseFbFollowers(await response.text());
         }
+      } catch (e) {}
+
+      // Tier 2: Mobile Facebook (m.facebook.com)
+      if (!count) {
+        try {
+          const mobileUrl = targetUrl.replace('www.facebook.com', 'm.facebook.com');
+          const response = await fetch(mobileUrl, {
+            headers: { 'User-Agent': browserUA, 'Accept-Language': 'en-US,en;q=0.9' }
+          });
+          if (response.ok) {
+            count = parseFbFollowers(await response.text());
+          }
+        } catch (e) {}
       }
 
+      // Tier 3: DuckDuckGo Search Indexing Fallback
       if (!count) {
-        const jsonMatch = html.match(/"follower_count":\s*(\d+)/) || 
-                          html.match(/"followers_count":\s*(\d+)/) ||
-                          html.match(/"subscriber_count":\s*(\d+)/);
-        if (jsonMatch && jsonMatch[1]) {
-          count = jsonMatch[1];
-        }
+        try {
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${cleanHandle}`;
+          const response = await fetch(ddgUrl, {
+            headers: { 'User-Agent': browserUA }
+          });
+          if (response.ok) {
+            count = parseFbFollowers(await response.text());
+          }
+        } catch (e) {}
       }
     }
 
