@@ -28,7 +28,7 @@ module.exports = async (req, res) => {
     let count = null;
 
     // ==========================================
-    // 1. TIKTOK (Direct Fetch)
+    // 1. TIKTOK
     // ==========================================
     if (plat.includes('tiktok')) {
       const url = `https://www.tiktok.com/@${cleanHandle}`;
@@ -81,27 +81,29 @@ module.exports = async (req, res) => {
       }
 
     // ==========================================
-    // 3. FACEBOOK (Embed Plugin & Meta Bot Fallback)
+    // 3. FACEBOOK (Followers, Likes, & Friends Matcher)
     // ==========================================
     } else if (plat.includes('facebook')) {
       
       const parseFbHTML = (htmlText) => {
         if (!htmlText) return null;
 
-        // Extract numbers directly before keywords
+        // 1. Check meta description tags for likes, followers, OR friends
         const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
                           htmlText.match(/meta name="description" content="([^"]+)"/i);
         if (metaMatch && metaMatch[1]) {
-          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this|people like this)/i);
+          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this|people like this|friends)/i);
           if (numMatch && numMatch[1]) return numMatch[1];
         }
 
-        // Check internal JSON script states
+        // 2. Check JSON payload strings & general regex patterns for friends/followers
         const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
                           htmlText.match(/"followers_count":\s*(\d+)/) ||
                           htmlText.match(/"subscriber_count":\s*(\d+)/) ||
+                          htmlText.match(/"friend_count":\s*(\d+)/) ||
+                          htmlText.match(/"friends_count":\s*(\d+)/) ||
                           htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/) ||
-                          htmlText.match(/([0-9.,KMBkmb]+)\s*(?:followers|likes)/i);
+                          htmlText.match(/([0-9.,KMBkmb]+)\s*(?:followers|likes|friends)/i);
         if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
 
         return null;
@@ -122,7 +124,7 @@ module.exports = async (req, res) => {
         }
       } catch (e) {}
 
-      // Tier 2: Facebook Page Plugin Iframe (Bypasses Login Wall)
+      // Tier 2: Facebook Page Plugin Iframe Fallback
       if (!count) {
         try {
           const pluginUrl = `https://www.facebook.com/plugins/page.php?href=${encodeURIComponent(fullUrl)}&tabs=timeline`;
