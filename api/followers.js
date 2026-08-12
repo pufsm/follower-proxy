@@ -5,7 +5,7 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Clean username/URL extractor
+  // Clean handle extractor: Strips out query params like ?is_from_webapp=1
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
     return last.replace(/^@/, '').trim();
   }
 
-  // Sanitizer: Ensures the count contains real numbers and strips accidental punctuation
+  // Sanitizer: Validates that the result contains actual numbers
   function validateAndCleanCount(val) {
     if (!val) return null;
     let str = val.toString().trim();
@@ -37,22 +37,66 @@ module.exports = async (req, res) => {
     let rawCount = null;
 
     // ==========================================
-    // 1. TIKTOK
+    // 1. TIKTOK (Multi-Tier Parser with Index Fallback)
     // ==========================================
     if (plat.includes('tiktok')) {
-      const url = `https://www.tiktok.com/@${cleanHandle}`;
-      const response = await fetch(url, {
-        headers: { 'User-Agent': browserUA, 'Accept-Language': 'en-US,en;q=0.9' }
-      });
-      const html = await response.text();
+      
+      const parseTikTokHTML = (htmlText) => {
+        if (!htmlText) return null;
 
-      const match = 
-        html.match(/"followerCount":\s*(\d+)/) ||
-        html.match(/"stats":\s*\{[^}]*"followerCount":\s*(\d+)/) ||
-        html.match(/followerCount":(\d+)/) ||
-        html.match(/([0-9.,KMBkmb]+)\s*Followers/i);
+        // 1. Extract from JSON web payloads (followerCount, fansCount, stats)
+        const jsonMatch = 
+          htmlText.match(/"followerCount":\s*(\d+)/) ||
+          htmlText.match(/"followersCount":\s*(\d+)/) ||
+          htmlText.match(/"fansCount":\s*(\d+)/) ||
+          htmlText.match(/"fans":\s*(\d+)/) ||
+          htmlText.match(/"stats":\s*\{[^}]*"followerCount":\s*(\d+)/) ||
+          htmlText.match(/followerCount":(\d+)/);
 
-      if (match && match[1]) rawCount = match[1];
+        if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
+
+        // 2. Extract from Meta tags
+        const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
+                          htmlText.match(/meta name="description" content="([^"]+)"/i);
+        if (metaMatch && metaMatch[1]) {
+          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:Followers|Fans)/i);
+          if (numMatch && numMatch[1]) return numMatch[1];
+        }
+
+        // 3. General regex match
+        const genMatch = htmlText.match(/([0-9.,KMBkmb]+)\s*(?:Followers|Fans)/i);
+        if (genMatch && genMatch[1]) return genMatch[1];
+
+        return null;
+      };
+
+      // Tier 1: Direct TikTok page request
+      try {
+        const url = `https://www.tiktok.com/@${cleanHandle}`;
+        const response = await fetch(url, {
+          headers: { 
+            'User-Agent': browserUA, 
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+        if (response.ok) {
+          rawCount = parseTikTokHTML(await response.text());
+        }
+      } catch (e) {}
+
+      // Tier 2: Search Indexing Fallback (If TikTok limits Vercel IP)
+      if (!rawCount) {
+        try {
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Atiktok.com%2F%40${cleanHandle}`;
+          const response = await fetch(ddgUrl, {
+            headers: { 'User-Agent': browserUA }
+          });
+          if (response.ok) {
+            rawCount = parseTikTokHTML(await response.text());
+          }
+        } catch (e) {}
+      }
 
     // ==========================================
     // 2. INSTAGRAM
@@ -80,14 +124,13 @@ module.exports = async (req, res) => {
       }
 
     // ==========================================
-    // 3. FACEBOOK (4-Tier Fallback including Search Indexing)
+    // 3. FACEBOOK
     // ==========================================
     } else if (plat.includes('facebook')) {
       
       const parseFbHTML = (htmlText) => {
         if (!htmlText) return null;
 
-        // OG Description Tag Matcher
         const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
                           htmlText.match(/meta name="description" content="([^"]+)"/i);
         if (metaMatch && metaMatch[1]) {
@@ -95,17 +138,12 @@ module.exports = async (req, res) => {
           if (numMatch && numMatch[1]) return numMatch[1];
         }
 
-        // JSON Payload Matcher
         const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
                           htmlText.match(/"followers_count":\s*(\d+)/) ||
                           htmlText.match(/"subscriber_count":\s*(\d+)/) ||
                           htmlText.match(/"friend_count":\s*(\d+)/) ||
                           htmlText.match(/"friends_count":\s*(\d+)/);
         if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
-
-        // General text pattern matcher
-        const textMatch = htmlText.match(/(\d[\d.,KMBkmb]*)\s*(?:followers|people follow this|likes|friends)/i);
-        if (textMatch && textMatch[1]) return textMatch[1];
 
         return null;
       };
@@ -115,7 +153,6 @@ module.exports = async (req, res) => {
         fullUrl = `https://www.facebook.com/${cleanHandle}`;
       }
 
-      // Tier 1: Direct Facebook fetch via Bot Header
       try {
         const response = await fetch(fullUrl, {
           headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
@@ -123,7 +160,6 @@ module.exports = async (req, res) => {
         if (response.ok) rawCount = parseFbHTML(await response.text());
       } catch (e) {}
 
-      // Tier 2: Facebook Page Plugin Iframe
       if (!rawCount) {
         try {
           const pluginUrl = `https://www.facebook.com/plugins/page.php?href=${encodeURIComponent(fullUrl)}&tabs=timeline`;
@@ -133,20 +169,9 @@ module.exports = async (req, res) => {
           if (response.ok) rawCount = parseFbHTML(await response.text());
         } catch (e) {}
       }
-
-      // Tier 3: Search Indexing Fallback (For profiles hiding stats behind "Join Facebook")
-      if (!rawCount) {
-        try {
-          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${cleanHandle}`;
-          const response = await fetch(ddgUrl, {
-            headers: { 'User-Agent': browserUA }
-          });
-          if (response.ok) rawCount = parseFbHTML(await response.text());
-        } catch (e) {}
-      }
     }
 
-    // Final clean check
+    // Validate and clean extracted result
     const finalCount = validateAndCleanCount(rawCount);
 
     if (finalCount !== null) {
