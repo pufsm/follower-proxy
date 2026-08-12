@@ -18,6 +18,17 @@ module.exports = async (req, res) => {
     return last.replace(/^@/, '').trim();
   }
 
+  // Helper function to prevent lone dots/punctuation from returning
+  function validateAndCleanCount(val) {
+    if (!val) return null;
+    let str = val.toString().trim();
+    // Remove leading or trailing periods/punctuation
+    str = str.replace(/^[^0-9]+|[^0-9KMBkmb]+$/g, '').trim();
+    // Must contain at least one digit to be valid
+    if (!/\d/.test(str)) return null;
+    return str;
+  }
+
   const cleanHandle = extractCleanHandle(handle);
   const plat = platform.toLowerCase().trim();
 
@@ -25,7 +36,7 @@ module.exports = async (req, res) => {
   const fbBotUA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
 
   try {
-    let count = null;
+    let rawCount = null;
 
     // ==========================================
     // 1. TIKTOK
@@ -43,67 +54,64 @@ module.exports = async (req, res) => {
         html.match(/followerCount":(\d+)/) ||
         html.match(/([0-9.,KMBkmb]+)\s*Followers/i);
 
-      if (match && match[1]) count = match[1];
+      if (match && match[1]) rawCount = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM (Multi-Mirror Fallback)
+    // 2. INSTAGRAM
     // ==========================================
     } else if (plat.includes('instagram')) {
       const parseFollowers = (text) => {
         if (!text) return null;
-        const m1 = text.match(/([0-9.,KMBkmb]+)\s*Followers/i);
-        if (m1 && m1[1]) return m1[1];
-        const m2 = text.match(/Followers\s*:?\s*([0-9.,KMBkmb]+)/i);
-        if (m2 && m2[1]) return m2[1];
+        const m1 = text.match(/([0-9.,KMBkmb]+\s*Followers)/i);
+        if (m1 && m1[1]) return m1[1].replace(/Followers/i, '');
+        const m2 = text.match(/(Followers\s*:?\s*[0-9.,KMBkmb]+)/i);
+        if (m2 && m2[1]) return m2[1].replace(/Followers\s*:?/i, '');
         return null;
       };
 
       // Mirror 1: Imginn
       try {
         const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
-        if (res.ok) count = parseFollowers(await res.text());
+        if (res.ok) rawCount = parseFollowers(await res.text());
       } catch (e) {}
 
       // Mirror 2: Picuki
-      if (!count) {
+      if (!rawCount) {
         try {
           const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) count = parseFollowers(await res.text());
+          if (res.ok) rawCount = parseFollowers(await res.text());
         } catch (e) {}
       }
 
       // Mirror 3: Dumpoir
-      if (!count) {
+      if (!rawCount) {
         try {
           const res = await fetch(`https://dumpoir.com/v/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) count = parseFollowers(await res.text());
+          if (res.ok) rawCount = parseFollowers(await res.text());
         } catch (e) {}
       }
 
     // ==========================================
-    // 3. FACEBOOK (Followers, Likes, & Friends Matcher)
+    // 3. FACEBOOK
     // ==========================================
     } else if (plat.includes('facebook')) {
       
       const parseFbHTML = (htmlText) => {
         if (!htmlText) return null;
 
-        // 1. Check meta description tags for likes, followers, OR friends
         const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
                           htmlText.match(/meta name="description" content="([^"]+)"/i);
         if (metaMatch && metaMatch[1]) {
-          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this|people like this|friends)/i);
+          const numMatch = metaMatch[1].match(/(\d[\d.,KMBkmb]*)\s*(?:likes|followers|people follow this|people like this|friends)/i);
           if (numMatch && numMatch[1]) return numMatch[1];
         }
 
-        // 2. Check JSON payload strings & general regex patterns for friends/followers
         const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
                           htmlText.match(/"followers_count":\s*(\d+)/) ||
                           htmlText.match(/"subscriber_count":\s*(\d+)/) ||
                           htmlText.match(/"friend_count":\s*(\d+)/) ||
                           htmlText.match(/"friends_count":\s*(\d+)/) ||
-                          htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/) ||
-                          htmlText.match(/([0-9.,KMBkmb]+)\s*(?:followers|likes|friends)/i);
+                          htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/);
         if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
 
         return null;
@@ -114,32 +122,33 @@ module.exports = async (req, res) => {
         fullUrl = `https://www.facebook.com/${cleanHandle}`;
       }
 
-      // Tier 1: Direct Facebook fetch with Bot User-Agent
       try {
         const response = await fetch(fullUrl, {
           headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
         });
         if (response.ok) {
-          count = parseFbHTML(await response.text());
+          rawCount = parseFbHTML(await response.text());
         }
       } catch (e) {}
 
-      // Tier 2: Facebook Page Plugin Iframe Fallback
-      if (!count) {
+      if (!rawCount) {
         try {
           const pluginUrl = `https://www.facebook.com/plugins/page.php?href=${encodeURIComponent(fullUrl)}&tabs=timeline`;
           const response = await fetch(pluginUrl, {
             headers: { 'User-Agent': browserUA, 'Accept-Language': 'en-US,en;q=0.9' }
           });
           if (response.ok) {
-            count = parseFbHTML(await response.text());
+            rawCount = parseFbHTML(await response.text());
           }
         } catch (e) {}
       }
     }
 
-    if (count !== null && count !== undefined) {
-      return res.status(200).json({ success: true, platform: plat, handle: cleanHandle, followers: count });
+    // Sanitize & validate extracted value
+    const finalCount = validateAndCleanCount(rawCount);
+
+    if (finalCount !== null) {
+      return res.status(200).json({ success: true, platform: plat, handle: cleanHandle, followers: finalCount });
     } else {
       return res.status(404).json({ success: false, error: `Pattern not found for ${platform}.` });
     }
