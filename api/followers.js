@@ -18,13 +18,11 @@ module.exports = async (req, res) => {
     return last.replace(/^@/, '').trim();
   }
 
-  // Helper function to prevent lone dots/punctuation from returning
+  // Sanitizer: Ensures the count contains real numbers and strips accidental punctuation
   function validateAndCleanCount(val) {
     if (!val) return null;
     let str = val.toString().trim();
-    // Remove leading or trailing periods/punctuation
     str = str.replace(/^[^0-9]+|[^0-9KMBkmb]+$/g, '').trim();
-    // Must contain at least one digit to be valid
     if (!/\d/.test(str)) return null;
     return str;
   }
@@ -69,13 +67,11 @@ module.exports = async (req, res) => {
         return null;
       };
 
-      // Mirror 1: Imginn
       try {
         const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
         if (res.ok) rawCount = parseFollowers(await res.text());
       } catch (e) {}
 
-      // Mirror 2: Picuki
       if (!rawCount) {
         try {
           const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
@@ -83,22 +79,15 @@ module.exports = async (req, res) => {
         } catch (e) {}
       }
 
-      // Mirror 3: Dumpoir
-      if (!rawCount) {
-        try {
-          const res = await fetch(`https://dumpoir.com/v/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) rawCount = parseFollowers(await res.text());
-        } catch (e) {}
-      }
-
     // ==========================================
-    // 3. FACEBOOK
+    // 3. FACEBOOK (4-Tier Fallback including Search Indexing)
     // ==========================================
     } else if (plat.includes('facebook')) {
       
       const parseFbHTML = (htmlText) => {
         if (!htmlText) return null;
 
+        // OG Description Tag Matcher
         const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
                           htmlText.match(/meta name="description" content="([^"]+)"/i);
         if (metaMatch && metaMatch[1]) {
@@ -106,13 +95,17 @@ module.exports = async (req, res) => {
           if (numMatch && numMatch[1]) return numMatch[1];
         }
 
+        // JSON Payload Matcher
         const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
                           htmlText.match(/"followers_count":\s*(\d+)/) ||
                           htmlText.match(/"subscriber_count":\s*(\d+)/) ||
                           htmlText.match(/"friend_count":\s*(\d+)/) ||
-                          htmlText.match(/"friends_count":\s*(\d+)/) ||
-                          htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/);
+                          htmlText.match(/"friends_count":\s*(\d+)/);
         if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
+
+        // General text pattern matcher
+        const textMatch = htmlText.match(/(\d[\d.,KMBkmb]*)\s*(?:followers|people follow this|likes|friends)/i);
+        if (textMatch && textMatch[1]) return textMatch[1];
 
         return null;
       };
@@ -122,29 +115,38 @@ module.exports = async (req, res) => {
         fullUrl = `https://www.facebook.com/${cleanHandle}`;
       }
 
+      // Tier 1: Direct Facebook fetch via Bot Header
       try {
         const response = await fetch(fullUrl, {
           headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
         });
-        if (response.ok) {
-          rawCount = parseFbHTML(await response.text());
-        }
+        if (response.ok) rawCount = parseFbHTML(await response.text());
       } catch (e) {}
 
+      // Tier 2: Facebook Page Plugin Iframe
       if (!rawCount) {
         try {
           const pluginUrl = `https://www.facebook.com/plugins/page.php?href=${encodeURIComponent(fullUrl)}&tabs=timeline`;
           const response = await fetch(pluginUrl, {
             headers: { 'User-Agent': browserUA, 'Accept-Language': 'en-US,en;q=0.9' }
           });
-          if (response.ok) {
-            rawCount = parseFbHTML(await response.text());
-          }
+          if (response.ok) rawCount = parseFbHTML(await response.text());
+        } catch (e) {}
+      }
+
+      // Tier 3: Search Indexing Fallback (For profiles hiding stats behind "Join Facebook")
+      if (!rawCount) {
+        try {
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${cleanHandle}`;
+          const response = await fetch(ddgUrl, {
+            headers: { 'User-Agent': browserUA }
+          });
+          if (response.ok) rawCount = parseFbHTML(await response.text());
         } catch (e) {}
       }
     }
 
-    // Sanitize & validate extracted value
+    // Final clean check
     const finalCount = validateAndCleanCount(rawCount);
 
     if (finalCount !== null) {
