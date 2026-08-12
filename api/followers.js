@@ -5,12 +5,11 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Extract clean username from URLs like 'https://www.instagram.com/dylenefajardo/'
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
-    str = str.split('?')[0].split('#')[0]; // strip query params
-    str = str.replace(/\/+$/, '');         // strip trailing slash
+    str = str.split('?')[0].split('#')[0]; 
+    str = str.replace(/\/+$/, '');
     const parts = str.split('/');
     let last = parts[parts.length - 1];
     return last.replace(/^@/, '').trim();
@@ -21,7 +20,6 @@ module.exports = async (req, res) => {
 
   const browserUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
   const botUserAgent = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
-  const googleBotAgent = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
 
   try {
     let count = null;
@@ -32,10 +30,7 @@ module.exports = async (req, res) => {
     if (plat.includes('tiktok')) {
       const url = `https://www.tiktok.com/@${cleanHandle}`;
       const response = await fetch(url, {
-        headers: {
-          'User-Agent': browserUserAgent,
-          'Accept-Language': 'en-US,en;q=0.9'
-        }
+        headers: { 'User-Agent': browserUserAgent, 'Accept-Language': 'en-US,en;q=0.9' }
       });
       const html = await response.text();
 
@@ -48,50 +43,56 @@ module.exports = async (req, res) => {
       if (match && match[1]) count = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM (Uses internal Web API + Googlebot fallback)
+    // 2. INSTAGRAM (Uses Anonymous Viewers to bypass Vercel IP ban)
     // ==========================================
     } else if (plat.includes('instagram')) {
-      // Attempt A: Internal Instagram Web API
+      
+      // Helper function: Finds "123k Followers" or "Followers 123k" in raw text
+      const extractFollowers = (text) => {
+        if (!text) return null;
+        const m1 = text.match(/([0-9.,KMBkmb]+)\s*Followers/i);
+        if (m1 && m1[1]) return m1[1];
+        const m2 = text.match(/Followers\s*:?\s*([0-9.,KMBkmb]+)/i);
+        if (m2 && m2[1]) return m2[1];
+        return null;
+      };
+
+      // Attempt 1: Official Instagram (Just in case the IP block lifts)
       try {
-        const apiUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${cleanHandle}`;
-        const apiRes = await fetch(apiUrl, {
-          headers: {
-            'User-Agent': browserUserAgent,
-            'X-IG-App-ID': '936619743392459',
-            'Accept': '*/*'
-          }
+        const res = await fetch(`https://www.instagram.com/${cleanHandle}/`, {
+          headers: { 'User-Agent': botUserAgent }
         });
-        if (apiRes.ok) {
-          const json = await apiRes.json();
-          if (json?.data?.user?.edge_followed_by?.count !== undefined) {
-            count = json.data.user.edge_followed_by.count;
-          }
-        }
-      } catch (e) {
-        // Fall back to HTML parsing if API fails
+        const html = await res.text();
+        const meta = html.match(/meta property="og:description" content="([^"]+)"/i);
+        if (meta) count = extractFollowers(meta[1]);
+      } catch (e) {}
+
+      // Attempt 2: Picuki Proxy (Very Reliable)
+      if (!count) {
+        try {
+          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, {
+            headers: { 'User-Agent': browserUserAgent }
+          });
+          const html = await res.text();
+          const cleanText = html.replace(/<[^>]*>/g, ' '); // Strip HTML tags to raw text
+          count = extractFollowers(cleanText);
+        } catch (e) {}
       }
 
-      // Attempt B: Scraping OpenGraph tags via Googlebot header
-      if (count === null) {
-        const url = `https://www.instagram.com/${cleanHandle}/`;
-        const response = await fetch(url, {
-          headers: { 'User-Agent': googleBotAgent, 'Accept-Language': 'en-US,en;q=0.9' }
-        });
-        const html = await response.text();
-
-        const match = html.match(/meta property="og:description" content="([^"]+)"/i) ||
-                      html.match(/meta name="description" content="([^"]+)"/i);
-
-        if (match && match[1]) {
-          const followerMatch = match[1].match(/([0-9.,KMBkmb]+)\s*Followers/i);
-          if (followerMatch && followerMatch[1]) {
-            count = followerMatch[1];
-          }
-        }
+      // Attempt 3: Dumpor Proxy (Backup)
+      if (!count) {
+        try {
+          const res = await fetch(`https://dumpoir.com/v/${cleanHandle}`, {
+            headers: { 'User-Agent': browserUserAgent }
+          });
+          const html = await res.text();
+          const cleanText = html.replace(/<[^>]*>/g, ' ');
+          count = extractFollowers(cleanText);
+        } catch (e) {}
       }
 
     // ==========================================
-    // 3. FACEBOOK (Extracts ONLY digits before 'likes' or 'followers')
+    // 3. FACEBOOK (Extracts ONLY the clean number)
     // ==========================================
     } else if (plat.includes('facebook')) {
       let targetUrl = handle.startsWith('http') ? handle : `https://www.facebook.com/${cleanHandle}`;
@@ -106,15 +107,17 @@ module.exports = async (req, res) => {
                     html.match(/meta name="description" content="([^"]+)"/i);
 
       if (match && match[1]) {
-        const text = match[1];
-        // Clean extraction: isolates numbers like "2,283" from "Dylene May Fajardo. 2,283 likes..."
-        const numMatch = text.match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this)/i);
+        // Look specifically for the number right before the word 'likes' or 'followers'
+        const numMatch = match[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this)/i);
         if (numMatch && numMatch[1]) {
           count = numMatch[1];
         }
       }
     }
 
+    // ==========================================
+    // FINAL OUTPUT
+    // ==========================================
     if (count !== null) {
       return res.status(200).json({ success: true, platform: plat, handle: cleanHandle, followers: count });
     } else {
