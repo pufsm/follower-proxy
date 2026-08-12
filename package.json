@@ -1,0 +1,11 @@
+{
+  "name": "follower-proxy",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node api/followers.js"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^123.0.0",
+    "puppeteer-core": "^22.0.0"
+  }
+}
