@@ -1,7 +1,7 @@
-import chromium from '@sparticuz/chromium';
-import puppeteer from 'puppeteer-core';
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   const { platform, handle } = req.query;
 
   if (!platform || !handle) {
@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     });
 
     const page = await browser.newPage();
-
+    
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
@@ -60,4 +60,4 @@ export default async function handler(req, res) {
     if (browser) await browser.close();
     return res.status(500).json({ success: false, error: error.message });
   }
-}
+};
