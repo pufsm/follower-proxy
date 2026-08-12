@@ -5,11 +5,10 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Smart URL Cleaner
+  // Extract clean username from URLs
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
-    // Do NOT strip query params if it's a Facebook profile ID link
     if (!str.includes('profile.php')) {
       str = str.split('?')[0].split('#')[0];
     }
@@ -47,43 +46,59 @@ module.exports = async (req, res) => {
       if (match && match[1]) count = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM
+    // 2. INSTAGRAM (3-Tier Bypass Engine)
     // ==========================================
     } else if (plat.includes('instagram')) {
+      
+      const parseFollowers = (text) => {
+        if (!text) return null;
+        const m1 = text.match(/([0-9.,KMBkmb]+)\s*Followers/i);
+        if (m1 && m1[1]) return m1[1];
+        const m2 = text.match(/Followers\s*:?\s*([0-9.,KMBkmb]+)/i);
+        if (m2 && m2[1]) return m2[1];
+        return null;
+      };
+
+      // Tier 1: Imginn Mirror
       try {
-        const apiUrl = `https://i.instagram.com/api/v1/users/web_profile_info/?username=${cleanHandle}`;
-        const apiRes = await fetch(apiUrl, {
-          headers: {
-            'User-Agent': browserUA,
-            'x-ig-app-id': '936619743392459',
-            'Accept': '*/*'
-          }
+        const res = await fetch(`https://imginn.com/${cleanHandle}/`, {
+          headers: { 'User-Agent': browserUA }
         });
-        if (apiRes.ok) {
-          const json = await apiRes.json();
-          if (json?.data?.user?.edge_followed_by?.count !== undefined) {
-            count = json.data.user.edge_followed_by.count;
-          }
+        if (res.ok) {
+          const html = await res.text();
+          count = parseFollowers(html);
         }
       } catch (e) {}
 
+      // Tier 2: DuckDuckGo Search Indexing (if Imginn fails)
       if (!count) {
         try {
-          const res = await fetch(`https://www.instagram.com/${cleanHandle}/`, {
-            headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Ainstagram.com%2F${cleanHandle}`;
+          const res = await fetch(ddgUrl, {
+            headers: { 'User-Agent': browserUA }
           });
-          const html = await res.text();
-          const match = html.match(/meta property="og:description" content="([^"]+)"/i) ||
-                        html.match(/meta name="description" content="([^"]+)"/i);
-          if (match && match[1]) {
-            const numMatch = match[1].match(/([0-9.,KMBkmb]+)\s*Followers/i);
-            if (numMatch && numMatch[1]) count = numMatch[1];
+          if (res.ok) {
+            const html = await res.text();
+            count = parseFollowers(html);
+          }
+        } catch (e) {}
+      }
+
+      // Tier 3: Picuki Mirror (if both fail)
+      if (!count) {
+        try {
+          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, {
+            headers: { 'User-Agent': browserUA }
+          });
+          if (res.ok) {
+            const html = await res.text();
+            count = parseFollowers(html);
           }
         } catch (e) {}
       }
 
     // ==========================================
-    // 3. FACEBOOK (Handles both custom handles & profile.php?id= URLs)
+    // 3. FACEBOOK
     // ==========================================
     } else if (plat.includes('facebook')) {
       let targetUrl = handle.trim();
@@ -92,7 +107,6 @@ module.exports = async (req, res) => {
         targetUrl = `https://www.facebook.com/${cleanHandle}`;
       }
 
-      // If not an ID link, safely strip tracking parameters
       if (!targetUrl.includes('profile.php')) {
         targetUrl = targetUrl.split('?')[0];
       }
@@ -102,7 +116,6 @@ module.exports = async (req, res) => {
       });
       const html = await response.text();
 
-      // Attempt A: OpenGraph Description Meta Tag
       const metaMatch = html.match(/meta property="og:description" content="([^"]+)"/i) ||
                         html.match(/meta name="description" content="([^"]+)"/i);
 
@@ -114,7 +127,6 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Attempt B: Internal Script Payload (Fallback if Meta Tag fails)
       if (!count) {
         const jsonMatch = html.match(/"follower_count":\s*(\d+)/) || 
                           html.match(/"followers_count":\s*(\d+)/) ||
