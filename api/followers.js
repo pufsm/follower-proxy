@@ -5,7 +5,7 @@ module.exports = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing platform or handle parameter.' });
   }
 
-  // Extract clean username from URLs while preserving profile.php?id= links
+  // Clean username extractor
   function extractCleanHandle(input) {
     if (!input) return '';
     let str = input.trim();
@@ -22,13 +22,14 @@ module.exports = async (req, res) => {
   const plat = platform.toLowerCase().trim();
 
   const browserUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
-  const fbBotUA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
+  // Feature phone User-Agent triggers Facebook's ultra-lightweight mobile view
+  const featurePhoneUA = 'NokiaC3-00/5.1 (08.63) Profile/MIDP-2.1 Configuration/CLDC-1.1 Mozilla/5.0 UCBrowser/8.9.0.251 U2/1.0.0 Mobile';
 
   try {
     let count = null;
 
     // ==========================================
-    // 1. TIKTOK
+    // 1. TIKTOK (Native Vercel Fetch)
     // ==========================================
     if (plat.includes('tiktok')) {
       const url = `https://www.tiktok.com/@${cleanHandle}`;
@@ -46,7 +47,7 @@ module.exports = async (req, res) => {
       if (match && match[1]) count = match[1];
 
     // ==========================================
-    // 2. INSTAGRAM (Multi-tier bypass)
+    // 2. INSTAGRAM (Free Public Mirrors)
     // ==========================================
     } else if (plat.includes('instagram')) {
       
@@ -59,100 +60,61 @@ module.exports = async (req, res) => {
         return null;
       };
 
-      // Tier 1: Imginn
+      // Mirror 1: Pixwox
       try {
-        const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
-        if (res.ok) count = parseFollowers(await res.text());
+        const res = await fetch(`https://www.pixwox.com/profile/${cleanHandle}/`, {
+          headers: { 'User-Agent': browserUA }
+        });
+        if (res.ok) {
+          const html = await res.text();
+          count = parseFollowers(html);
+        }
       } catch (e) {}
 
-      // Tier 2: DuckDuckGo Search Indexing
+      // Mirror 2: Gramhir (Fallback)
       if (!count) {
         try {
-          const res = await fetch(`https://html.duckduckgo.com/html/?q=site%3Ainstagram.com%2F${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) count = parseFollowers(await res.text());
-        } catch (e) {}
-      }
-
-      // Tier 3: Picuki
-      if (!count) {
-        try {
-          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) count = parseFollowers(await res.text());
+          const res = await fetch(`https://gramhir.com/profile/${cleanHandle}`, {
+            headers: { 'User-Agent': browserUA }
+          });
+          if (res.ok) {
+            const html = await res.text();
+            count = parseFollowers(html);
+          }
         } catch (e) {}
       }
 
     // ==========================================
-    // 3. FACEBOOK (3-Tier Bypass Engine)
+    // 3. FACEBOOK (mbasic Backdoor)
     // ==========================================
     } else if (plat.includes('facebook')) {
       
-      const parseFbFollowers = (htmlText) => {
-        if (!htmlText) return null;
-
-        // 1. Check meta tags for likes or followers
-        const metaMatch = htmlText.match(/meta property="og:description" content="([^"]+)"/i) ||
-                          htmlText.match(/meta name="description" content="([^"]+)"/i);
-        if (metaMatch && metaMatch[1]) {
-          const numMatch = metaMatch[1].match(/([0-9.,KMBkmb]+)\s*(?:likes|followers|people follow this|people like this)/i);
-          if (numMatch && numMatch[1]) return numMatch[1];
-        }
-
-        // 2. Check JSON payload strings
-        const jsonMatch = htmlText.match(/"follower_count":\s*(\d+)/) || 
-                          htmlText.match(/"followers_count":\s*(\d+)/) ||
-                          htmlText.match(/"subscriber_count":\s*(\d+)/) ||
-                          htmlText.match(/"user_followers":\s*\{\s*"count":\s*(\d+)/);
-        if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
-
-        // 3. General text match
-        const textMatch = htmlText.match(/([0-9.,KMBkmb]+)\s*(?:followers|people follow this)/i);
-        if (textMatch && textMatch[1]) return textMatch[1];
-
-        return null;
-      };
-
       let targetUrl = handle.trim();
       if (!targetUrl.startsWith('http')) {
-        targetUrl = `https://www.facebook.com/${cleanHandle}`;
-      }
-      if (!targetUrl.includes('profile.php')) {
-        targetUrl = targetUrl.split('?')[0];
+        targetUrl = `https://mbasic.facebook.com/${cleanHandle}`;
+      } else {
+        targetUrl = targetUrl.replace('www.facebook.com', 'mbasic.facebook.com')
+                             .replace('web.facebook.com', 'mbasic.facebook.com')
+                             .replace('m.facebook.com', 'mbasic.facebook.com');
       }
 
-      // Tier 1: Desktop request with Bot User-Agent
-      try {
-        const response = await fetch(targetUrl, {
-          headers: { 'User-Agent': fbBotUA, 'Accept-Language': 'en-US,en;q=0.9' }
-        });
-        if (response.ok) {
-          count = parseFbFollowers(await response.text());
+      const response = await fetch(targetUrl, {
+        headers: { 'User-Agent': featurePhoneUA, 'Accept-Language': 'en-US,en;q=0.9' }
+      });
+      const html = await response.text();
+
+      // mbasic Facebook layout regex
+      const match = 
+        html.match(/([0-9.,KMBkmb]+)\s*(?:people follow this|followers|people like this|likes)/i) ||
+        html.match(/followed by\s*([0-9.,KMBkmb]+)/i) ||
+        html.match(/meta property="og:description" content="([^"]+)"/i);
+
+      if (match) {
+        if (match[1] && match[1].match(/[0-9]/)) {
+          // Isolate just the numerical value
+          const numOnly = match[1].match(/([0-9.,KMBkmb]+)/);
+          if (numOnly) count = numOnly[1];
         }
-      } catch (e) {}
-
-      // Tier 2: Mobile Facebook (m.facebook.com)
-      if (!count) {
-        try {
-          const mobileUrl = targetUrl.replace('www.facebook.com', 'm.facebook.com');
-          const response = await fetch(mobileUrl, {
-            headers: { 'User-Agent': browserUA, 'Accept-Language': 'en-US,en;q=0.9' }
-          });
-          if (response.ok) {
-            count = parseFbFollowers(await response.text());
-          }
-        } catch (e) {}
-      }
-
-      // Tier 3: DuckDuckGo Search Indexing Fallback
-      if (!count) {
-        try {
-          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${cleanHandle}`;
-          const response = await fetch(ddgUrl, {
-            headers: { 'User-Agent': browserUA }
-          });
-          if (response.ok) {
-            count = parseFbFollowers(await response.text());
-          }
-        } catch (e) {}
       }
     }
 
