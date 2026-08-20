@@ -43,11 +43,9 @@ module.exports = async (req, res) => {
     let rawCount = null;
 
     // ==========================================
-    // 1. TIKTOK (API Endpoint + Multi-State HTML Fallbacks)
+    // 1. TIKTOK
     // ==========================================
     if (plat.includes('tiktok')) {
-
-      // Tier 1: TikTok Web API Endpoint (Fastest & Most Accurate)
       try {
         const apiUrl = `https://www.tiktok.com/api/user/detail/?uniqueId=${encodeURIComponent(cleanHandle)}`;
         const apiRes = await fetch(apiUrl, {
@@ -65,7 +63,6 @@ module.exports = async (req, res) => {
         }
       } catch (e) {}
 
-      // Tier 2: Web Page Rehydration States (__UNIVERSAL_DATA_, __FRONTEND_PUB_DATA__, SIGI_STATE)
       if (!rawCount) {
         let targetUrl = handle.trim();
         if (!targetUrl.startsWith('http')) {
@@ -83,50 +80,19 @@ module.exports = async (req, res) => {
           }
 
           const html = await response.text();
+          const match = 
+            html.match(/"followerCount":\s*(\d+)/) ||
+            html.match(/"followersCount":\s*(\d+)/) ||
+            html.match(/"fansCount":\s*(\d+)/) ||
+            html.match(/"stats":\s*\{[^}]*"followerCount":\s*(\d+)/) ||
+            html.match(/([0-9.,KMBkmb]+)\s*Followers/i);
 
-          // Search inside script tags
-          const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
-          if (scriptMatches) {
-            for (const script of scriptMatches) {
-              if (script.includes('followerCount')) {
-                const countMatch = script.match(/"followerCount":\s*(\d+)/) || script.match(/"followersCount":\s*(\d+)/);
-                if (countMatch && countMatch[1]) {
-                  rawCount = countMatch[1];
-                  break;
-                }
-              }
-            }
-          }
-
-          // Direct Regex Backup
-          if (!rawCount) {
-            const match = 
-              html.match(/"followerCount":\s*(\d+)/) ||
-              html.match(/"followersCount":\s*(\d+)/) ||
-              html.match(/"fansCount":\s*(\d+)/) ||
-              html.match(/"stats":\s*\{[^}]*"followerCount":\s*(\d+)/) ||
-              html.match(/([0-9.,KMBkmb]+)\s*Followers/i);
-
-            if (match && match[1]) rawCount = match[1];
-          }
-        } catch (e) {}
-      }
-
-      // Tier 3: DuckDuckGo Search Indexing Fallback
-      if (!rawCount && cleanHandle) {
-        try {
-          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Atiktok.com%2F%40${cleanHandle}`;
-          const ddgRes = await fetch(ddgUrl, { headers: { 'User-Agent': browserUA } });
-          if (ddgRes.ok) {
-            const ddgHtml = await ddgRes.text();
-            const ddgMatch = ddgHtml.match(/([0-9.,KMBkmb]+)\s*Followers/i) || ddgHtml.match(/"followerCount":\s*(\d+)/);
-            if (ddgMatch && ddgMatch[1]) rawCount = ddgMatch[1];
-          }
+          if (match && match[1]) rawCount = match[1];
         } catch (e) {}
       }
 
     // ==========================================
-    // 2. INSTAGRAM
+    // 2. INSTAGRAM (3 Free Mirror Rotations)
     // ==========================================
     } else if (plat.includes('instagram')) {
       const parseFollowers = (text) => {
@@ -135,14 +101,18 @@ module.exports = async (req, res) => {
         if (m1 && m1[1]) return m1[1].replace(/Followers/i, '');
         const m2 = text.match(/(Followers\s*:?\s*[0-9.,KMBkmb]+)/i);
         if (m2 && m2[1]) return m2[1].replace(/Followers\s*:?/i, '');
+        const m3 = text.match(/"edge_followed_by":\s*\{\s*"count":\s*(\d+)/);
+        if (m3 && m3[1]) return m3[1];
         return null;
       };
 
+      // Mirror 1: Imginn
       try {
         const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
         if (res.ok) rawCount = parseFollowers(await res.text());
       } catch (e) {}
 
+      // Mirror 2: Picuki
       if (!rawCount) {
         try {
           const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
@@ -150,11 +120,18 @@ module.exports = async (req, res) => {
         } catch (e) {}
       }
 
+      // Mirror 3: Dumpoir
+      if (!rawCount) {
+        try {
+          const res = await fetch(`https://dumpoir.com/v/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
+          if (res.ok) rawCount = parseFollowers(await res.text());
+        } catch (e) {}
+      }
+
     // ==========================================
-    // 3. FACEBOOK (Profiles, Pages, Groups & Communities)
+    // 3. FACEBOOK
     // ==========================================
     } else if (plat.includes('facebook')) {
-      
       const parseFbHTML = (htmlText) => {
         if (!htmlText) return null;
 
@@ -169,14 +146,8 @@ module.exports = async (req, res) => {
                           htmlText.match(/"followers_count":\s*(\d+)/) ||
                           htmlText.match(/"subscriber_count":\s*(\d+)/) ||
                           htmlText.match(/"friend_count":\s*(\d+)/) ||
-                          htmlText.match(/"friends_count":\s*(\d+)/) ||
-                          htmlText.match(/"member_count":\s*(\d+)/) ||
-                          htmlText.match(/"members_count":\s*(\d+)/) ||
                           htmlText.match(/"group_member_count":\s*(\d+)/);
         if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
-
-        const textMatch = htmlText.match(/(\d[\d.,KMBkmb]*)\s*(?:followers|people follow this|likes|friends|members)/i);
-        if (textMatch && textMatch[1]) return textMatch[1];
 
         return null;
       };
@@ -192,16 +163,6 @@ module.exports = async (req, res) => {
         });
         if (response.ok) rawCount = parseFbHTML(await response.text());
       } catch (e) {}
-
-      if (!rawCount) {
-        try {
-          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${encodeURIComponent(cleanHandle)}`;
-          const response = await fetch(ddgUrl, {
-            headers: { 'User-Agent': browserUA }
-          });
-          if (response.ok) rawCount = parseFbHTML(await response.text());
-        } catch (e) {}
-      }
     }
 
     const finalCount = validateAndCleanCount(rawCount);
