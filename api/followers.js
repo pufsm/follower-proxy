@@ -92,39 +92,42 @@ module.exports = async (req, res) => {
       }
 
     // ==========================================
-    // 2. INSTAGRAM (3 Free Mirror Rotations)
+    // 2. INSTAGRAM (Search Snippet Parsing Engine)
     // ==========================================
     } else if (plat.includes('instagram')) {
-      const parseFollowers = (text) => {
+
+      const parseSnippet = (text) => {
         if (!text) return null;
-        const m1 = text.match(/([0-9.,KMBkmb]+\s*Followers)/i);
-        if (m1 && m1[1]) return m1[1].replace(/Followers/i, '');
-        const m2 = text.match(/(Followers\s*:?\s*[0-9.,KMBkmb]+)/i);
-        if (m2 && m2[1]) return m2[1].replace(/Followers\s*:?/i, '');
-        const m3 = text.match(/"edge_followed_by":\s*\{\s*"count":\s*(\d+)/);
-        if (m3 && m3[1]) return m3[1];
+        // Matches "15.2K Followers", "15K followers", "15,200 Followers"
+        const m1 = text.match(/([0-9.,KMBkmb]+)\s*Followers/i);
+        if (m1 && m1[1]) return m1[1];
+        const m2 = text.match(/Followers\s*:?\s*([0-9.,KMBkmb]+)/i);
+        if (m2 && m2[1]) return m2[1];
         return null;
       };
 
-      // Mirror 1: Imginn
+      // Tier 1: DuckDuckGo Search Index
       try {
-        const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
-        if (res.ok) rawCount = parseFollowers(await res.text());
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Ainstagram.com%2F${encodeURIComponent(cleanHandle)}`;
+        const ddgRes = await fetch(ddgUrl, { headers: { 'User-Agent': browserUA } });
+        if (ddgRes.ok) {
+          rawCount = parseSnippet(await ddgRes.text());
+        }
       } catch (e) {}
 
-      // Mirror 2: Picuki
+      // Tier 2: Imginn Web Mirror
       if (!rawCount) {
         try {
-          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) rawCount = parseFollowers(await res.text());
+          const res = await fetch(`https://imginn.com/${cleanHandle}/`, { headers: { 'User-Agent': browserUA } });
+          if (res.ok) rawCount = parseSnippet(await res.text());
         } catch (e) {}
       }
 
-      // Mirror 3: Dumpoir
+      // Tier 3: Picuki Web Mirror
       if (!rawCount) {
         try {
-          const res = await fetch(`https://dumpoir.com/v/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
-          if (res.ok) rawCount = parseFollowers(await res.text());
+          const res = await fetch(`https://www.picuki.com/profile/${cleanHandle}`, { headers: { 'User-Agent': browserUA } });
+          if (res.ok) rawCount = parseSnippet(await res.text());
         } catch (e) {}
       }
 
@@ -163,6 +166,14 @@ module.exports = async (req, res) => {
         });
         if (response.ok) rawCount = parseFbHTML(await response.text());
       } catch (e) {}
+
+      if (!rawCount) {
+        try {
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=site%3Afacebook.com%2F${encodeURIComponent(cleanHandle)}`;
+          const response = await fetch(ddgUrl, { headers: { 'User-Agent': browserUA } });
+          if (response.ok) rawCount = parseFbHTML(await response.text());
+        } catch (e) {}
+      }
     }
 
     const finalCount = validateAndCleanCount(rawCount);
