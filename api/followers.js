@@ -160,11 +160,12 @@ module.exports = async (req, res) => {
     // ==========================================
     const finalCount = validateAndCleanCount(rawCount);
 
-    if (finalCount !== null) {
-      return res.status(200).json({ success: true, platform: plat, handle: cleanHandle, followers: finalCount });
-    } else {
-      return res.status(404).json({ success: false, error: `Pattern not found for ${platform}.` });
-    }
+   // AFTER
+if (finalCount !== null) {
+  return res.status(200).json({ success: true, platform: plat, handle: cleanHandle, followers: finalCount });
+} else {
+  return res.status(200).json({ success: false, error: `Pattern not found for ${platform}.` });
+}
 
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
